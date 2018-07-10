@@ -1,0 +1,274 @@
+﻿using Rebalanser.Core.Logging;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace Rebalanser.SqlServer.Leases
+{
+    class LeaseService : ILeaseService
+    {
+        private string connectionString;
+        private ILogger logger;
+
+        public LeaseService(string connectionString, ILogger logger)
+        {
+            this.connectionString = connectionString;
+            this.logger = logger;
+        }
+
+        public async Task<LeaseResponse> TryAcquireLeaseAsync(AcquireLeaseRequest acquireLeaseRequest)
+        {
+            using (var con = new SqlConnection(this.connectionString))
+            {
+                await con.OpenAsync();
+                var transaction = con.BeginTransaction(IsolationLevel.Serializable);
+                var command = con.CreateCommand();
+                command.Transaction = transaction;
+
+                try
+                {
+                    command.CommandText = "UPDATE ResourceGroups SET LockedByClient = @ClientId WHERE ResourceGroup = @ResourceGroup";
+                    command.Parameters.AddWithValue("@ClientId", acquireLeaseRequest.ClientId);
+                    command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = acquireLeaseRequest.ResourceGroup;
+                    await command.ExecuteNonQueryAsync();
+
+                    command.Parameters.Clear();
+                    command.CommandText = @"SELECT [ResourceGroup]
+      ,[CoordinatorId]
+      ,[LastCoordinatorRenewal]
+      ,[CoordinatorServer]
+      ,[LockedByClient]
+      ,[FencingToken]
+      ,[LeaseExpirySeconds]
+	  ,GETUTCDATE() AS [TimeNow]
+FROM [RBR].[ResourceGroups]
+WHERE ResourceGroup = @ResourceGroup";
+                    command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = acquireLeaseRequest.ResourceGroup;
+
+                    ResourceGroup rg = null;
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        if (await reader.ReadAsync())
+                        {
+                            rg = new ResourceGroup()
+                            {
+                                Name = acquireLeaseRequest.ResourceGroup,
+                                CoordinatorId = GetGuidFromNullableGuid(reader, "CoordinatorId"),
+                                CoordinatorServer = GetStringFromNullableGuid(reader, "CoordinatorServer"),
+                                LastCoordinatorRenewal = GetDateTimeFromNullable(reader, "LastCoordinatorRenewal"),
+                                TimeNow = (DateTime)reader["TimeNow"],
+                                LockedByClientId = GetGuidFromNullableGuid(reader, "LockedByClient"),
+                                FencingToken = (int)reader["FencingToken"],
+                                LeaseExpirySeconds = (int)reader["LeaseExpirySeconds"]
+                            };
+                        }
+                    }
+
+                    if (rg == null)
+                        return new LeaseResponse() { Result = LeaseResult.NoLease, Lease = new Lease() { ExpiryPeriod = TimeSpan.FromMinutes(1) } };
+
+                    var response = new LeaseResponse();
+                    response.Lease = new Lease();
+                    if (rg.CoordinatorId == Guid.Empty || (rg.TimeNow - rg.LastCoordinatorRenewal).TotalSeconds > rg.LeaseExpirySeconds)
+                    {
+                        response.Lease.ResourceGroup = acquireLeaseRequest.ResourceGroup;
+                        response.Lease.ClientId = acquireLeaseRequest.ClientId;
+                        response.Lease.ExpiryPeriod = TimeSpan.FromSeconds(rg.LeaseExpirySeconds);
+                        response.Lease.FencingToken = ++rg.FencingToken;
+                        response.Result = LeaseResult.Granted;
+
+                        command.Parameters.Clear();
+                        command.CommandText = @"UPDATE [RBR].[ResourceGroups]
+   SET [CoordinatorId] = @ClientId
+      ,[LastCoordinatorRenewal] = GETUTCDATE()
+      ,[CoordinatorServer] = @Server
+      ,[FencingToken] = @FencingToken
+ WHERE ResourceGroup = @ResourceGroup";
+                        command.Parameters.AddWithValue("@ClientId", acquireLeaseRequest.ClientId);
+                        command.Parameters.AddWithValue("@FencingToken", response.Lease.FencingToken);
+                        command.Parameters.Add("@Server", SqlDbType.NVarChar, 500).Value = Environment.MachineName;
+                        command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = acquireLeaseRequest.ResourceGroup;
+                        await command.ExecuteNonQueryAsync();
+                    }
+                    else
+                    {
+                        response.Lease.ExpiryPeriod = TimeSpan.FromSeconds(rg.LeaseExpirySeconds);
+                        response.Result = LeaseResult.Denied;
+                    }
+
+                    transaction.Commit();
+
+                    return response;
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        this.logger.Error("Rolling back lease acquisition: ", ex);
+                        transaction.Rollback();
+                    }
+                    catch (Exception rex)
+                    {
+                        this.logger.Error("Roll back of lease acquisition failed: ", rex);
+                    }
+
+                    return new LeaseResponse()
+                    {
+                        Result = LeaseResult.Error
+                    };
+                }
+            }
+        }
+
+        public async Task<LeaseResponse> TryRenewLeaseAsync(RenewLeaseRequest renewLeaseRequest)
+        {
+            using (var conn = new SqlConnection(this.connectionString))
+            {
+                await conn.OpenAsync();
+                var transaction = conn.BeginTransaction(IsolationLevel.Serializable);
+                var command = conn.CreateCommand();
+                command.Transaction = transaction;
+
+                try
+                {
+                    command.CommandText = "UPDATE ResourceGroups SET LockedByClient = @ClientId WHERE ResourceGroup = @ResourceGroup";
+                    command.Parameters.AddWithValue("@ClientId", renewLeaseRequest.ClientId);
+                    command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = renewLeaseRequest.ResourceGroup;
+                    await command.ExecuteNonQueryAsync();
+
+                    command.Parameters.Clear();
+                    command.CommandText = @"SELECT [ResourceGroup]
+      ,[CoordinatorId]
+      ,[LastCoordinatorRenewal]
+      ,[CoordinatorServer]
+      ,[LockedByClient]
+      ,[FencingToken]
+      ,[LeaseExpirySeconds]
+	  ,GETUTCDATE() AS [TimeNow]
+FROM [RBR].[ResourceGroups]
+WHERE ResourceGroup = @ResourceGroup";
+                    command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = renewLeaseRequest.ResourceGroup;
+
+                    ResourceGroup rg = null;
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        if (await reader.ReadAsync())
+                        {
+                            rg = new ResourceGroup()
+                            {
+                                Name = renewLeaseRequest.ResourceGroup,
+                                CoordinatorId = GetGuidFromNullableGuid(reader, "CoordinatorId"),
+                                CoordinatorServer = GetStringFromNullableGuid(reader, "CoordinatorServer"),
+                                LastCoordinatorRenewal = GetDateTimeFromNullable(reader, "LastCoordinatorRenewal"),
+                                TimeNow = (DateTime)reader["TimeNow"],
+                                LockedByClientId = GetGuidFromNullableGuid(reader, "LockedByClient"),
+                                FencingToken = (int)reader["FencingToken"],
+                                LeaseExpirySeconds = (int)reader["LeaseExpirySeconds"]
+                            };
+                        }
+                    }
+
+                    if (rg == null)
+                        return new LeaseResponse() { Result = LeaseResult.NoLease };
+
+                    var response = new LeaseResponse();
+                    response.Lease = new Lease();
+                    if (!rg.CoordinatorId.Equals(renewLeaseRequest.ClientId) || rg.FencingToken > renewLeaseRequest.FencingToken)
+                        return new LeaseResponse() { Result = LeaseResult.Denied };
+
+                    if ((rg.TimeNow - rg.LastCoordinatorRenewal).TotalSeconds <= rg.LeaseExpirySeconds)
+                    {
+                        response.Lease.ResourceGroup = renewLeaseRequest.ResourceGroup;
+                        response.Lease.ClientId = renewLeaseRequest.ClientId;
+                        response.Lease.ExpiryPeriod = TimeSpan.FromSeconds(rg.LeaseExpirySeconds);
+                        response.Lease.FencingToken = rg.FencingToken;
+                        response.Result = LeaseResult.Granted;
+
+                        command.Parameters.Clear();
+                        command.CommandText = @"UPDATE [RBR].[ResourceGroups]
+   SET [LastCoordinatorRenewal] = GETUTCDATE()
+ WHERE ResourceGroup = @ResourceGroup";
+                        command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = renewLeaseRequest.ResourceGroup;
+                        await command.ExecuteNonQueryAsync();
+                    }
+                    else
+                    {
+                        response.Result = LeaseResult.Denied;
+                    }
+
+                    transaction.Commit();
+
+                    return response;
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        this.logger.Error("Rolling back lease renewal: ", ex);
+                        transaction.Rollback();
+                    }
+                    catch (Exception rex)
+                    {
+                        this.logger.Error("Rollback of lease renewal failed: ", rex);
+                    }
+
+                    return new LeaseResponse()
+                    {
+                        Result = LeaseResult.Error
+                    };
+                }
+            }
+        }
+
+        public async Task RelinquishLeaseAsync(RelinquishLeaseRequest relinquishLeaseRequest)
+        {
+            using (var conn = new SqlConnection(this.connectionString))
+            {
+                await conn.OpenAsync();
+                var command = conn.CreateCommand();
+                command.CommandText = @"UPDATE [RBR].[ResourceGroups]
+   SET [CoordinatorId] = NULL
+ WHERE ResourceGroup = @ResourceGroup
+AND [CoordinatorId] = @ClientId
+AND [FencingToken] = @FencingToken";
+                command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = relinquishLeaseRequest.ResourceGroup;
+                command.Parameters.AddWithValue("@ClientId", relinquishLeaseRequest.ClientId);
+                command.Parameters.AddWithValue("@FencingToken", relinquishLeaseRequest.FencingToken);
+                await command.ExecuteNonQueryAsync();
+            }
+        }
+
+        private DateTime GetDateTimeFromNullable(SqlDataReader reader, string key)
+        {
+            var data = reader[key];
+            if (data == DBNull.Value)
+            {
+                return new DateTime(1980, 1, 1);
+            }
+            return (DateTime)reader[key];
+        }
+
+        private Guid GetGuidFromNullableGuid(SqlDataReader reader, string key)
+        {
+            var data = reader[key];
+            if (data == DBNull.Value)
+            {
+                return Guid.Empty;
+            }
+            return (Guid)reader[key];
+        }
+
+        private string GetStringFromNullableGuid(SqlDataReader reader, string key)
+        {
+            var data = reader[key];
+            if (data == DBNull.Value)
+            {
+                return string.Empty;
+            }
+            return reader[key].ToString();
+        }
+    }
+}

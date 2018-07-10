@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Version>0.1.0</Version>
+    <PackageId>Rebalanser.SqlServer</PackageId>
+    <Authors>Jack Vanlightly</Authors>
+    <Copyright>Jack Vanlightly</Copyright>
+    <PackageLicenseUrl>https://opensource.org/licenses/MIT</PackageLicenseUrl>
+    <PackageProjectUrl>https://github.com/Vanlightly/Rebalanser</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Vanlightly/Rebalanser</RepositoryUrl>
+    <RepositoryType>Git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Data.SqlClient" Version="4.5.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Rebalanser.Core\Rebalanser.Core.csproj" />
+  </ItemGroup>
+
+</Project>
