@@ -41,10 +41,7 @@ namespace Rebalanser.SqlServer
             this.store = new ResourceGroupStore();
 
             if (logger == null)
-            {
-                this.logger = new ConsoleLogger();
-                this.logger.SetMinimumLevel(LogLevel.INFO);
-            }
+                this.logger = new NullLogger();
             else
                 this.logger = logger;
 
@@ -76,7 +73,7 @@ namespace Rebalanser.SqlServer
             lock (startLockObj)
             {
                 if (this.started)
-                    throw new Exception("Context already started");
+                    throw new RebalanserException("Context already started");
             }
 
             this.resourceGroup = resourceGroup;
@@ -142,7 +139,7 @@ namespace Rebalanser.SqlServer
                         ClientId = this.clientId,
                         ResourceGroup = this.resourceGroup
                     };
-                    var response = await leaseService.TryAcquireLeaseAsync(request);
+                    var response = await TryAcquireLeaseAsync(request);
                     if (response.Result == LeaseResult.Granted)
                     {
                         var lease = response.Lease;
@@ -153,7 +150,7 @@ namespace Rebalanser.SqlServer
                         // lease renewal loop
                         while (!token.IsCancellationRequested && !coordinatorToken.FencingTokenViolation)
                         {
-                            response = await leaseService.TryRenewLeaseAsync(new RenewLeaseRequest() { ClientId = this.clientId, ResourceGroup = this.resourceGroup, FencingToken = lease.FencingToken });
+                            response = await TryRenewLeaseAsync(new RenewLeaseRequest() { ClientId = this.clientId, ResourceGroup = this.resourceGroup, FencingToken = lease.FencingToken });
                             if (response.Result == LeaseResult.Granted)
                             {
                                 PostLeaderEvent(lease.FencingToken, lease.ExpiryPeriod, coordinatorToken, clientEvents);
@@ -189,6 +186,50 @@ namespace Rebalanser.SqlServer
 
                 clientEvents.CompleteAdding();
             });
+        }
+
+        private async Task<LeaseResponse> TryAcquireLeaseAsync(AcquireLeaseRequest request)
+        {
+            int triesLeft = 3;
+            while (triesLeft > 0)
+            {
+                triesLeft--;
+                var response = await this.leaseService.TryAcquireLeaseAsync(request);
+                if (response.Result != LeaseResult.TransientError)
+                    return response;
+                else if (triesLeft > 0)
+                    await Task.Delay(2000);
+                else
+                    return response;
+            }
+
+            // this should never happen
+            return new LeaseResponse()
+            {
+                Result = LeaseResult.Error
+            };
+        }
+
+        private async Task<LeaseResponse> TryRenewLeaseAsync(RenewLeaseRequest request)
+        {
+            int triesLeft = 3;
+            while (triesLeft > 0)
+            {
+                triesLeft--;
+                var response = await this.leaseService.TryRenewLeaseAsync(request);
+                if (response.Result != LeaseResult.TransientError)
+                    return response;
+                else if (triesLeft > 0)
+                    await Task.Delay(2000);
+                else
+                    return response;
+            }
+
+            // this should never happen
+            return new LeaseResponse()
+            {
+                Result = LeaseResult.Error
+            };
         }
 
         private TimeSpan GetInterval(TimeSpan leaseExpiry)

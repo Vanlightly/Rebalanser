@@ -1,4 +1,6 @@
-﻿using Rebalanser.Core.Logging;
+﻿using Rebalanser.Core;
+using Rebalanser.Core.Logging;
+using Rebalanser.SqlServer.Connections;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -21,20 +23,21 @@ namespace Rebalanser.SqlServer.Leases
 
         public async Task<LeaseResponse> TryAcquireLeaseAsync(AcquireLeaseRequest acquireLeaseRequest)
         {
-            using (var con = new SqlConnection(this.connectionString))
+            using (var con = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await con.OpenAsync();
                 var transaction = con.BeginTransaction(IsolationLevel.Serializable);
                 var command = con.CreateCommand();
                 command.Transaction = transaction;
 
                 try
                 {
+                    // obtain lock on the record blocking other nodes until the transaction is committed
                     command.CommandText = "UPDATE ResourceGroups SET LockedByClient = @ClientId WHERE ResourceGroup = @ResourceGroup";
                     command.Parameters.AddWithValue("@ClientId", acquireLeaseRequest.ClientId);
                     command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = acquireLeaseRequest.ResourceGroup;
                     await command.ExecuteNonQueryAsync();
 
+                    // get the resource group (TODO, use OUTPUT on UPDATE query instead of another query)
                     command.Parameters.Clear();
                     command.CommandText = @"SELECT [ResourceGroup]
       ,[CoordinatorId]
@@ -70,6 +73,7 @@ WHERE ResourceGroup = @ResourceGroup";
                     if (rg == null)
                         return new LeaseResponse() { Result = LeaseResult.NoLease, Lease = new Lease() { ExpiryPeriod = TimeSpan.FromMinutes(1) } };
 
+                    // determine the response, if the CoordinatorId is empty or expired then grant, else deny
                     var response = new LeaseResponse();
                     response.Lease = new Lease();
                     if (rg.CoordinatorId == Guid.Empty || (rg.TimeNow - rg.LastCoordinatorRenewal).TotalSeconds > rg.LeaseExpirySeconds)
@@ -103,7 +107,7 @@ WHERE ResourceGroup = @ResourceGroup";
 
                     return response;
                 }
-                catch (Exception ex)
+                catch (SqlException ex)
                 {
                     try
                     {
@@ -112,12 +116,13 @@ WHERE ResourceGroup = @ResourceGroup";
                     }
                     catch (Exception rex)
                     {
-                        this.logger.Error("Roll back of lease acquisition failed: ", rex);
+                        this.logger.Error("Rollback of lease acquisition failed: ", rex);
                     }
 
                     return new LeaseResponse()
                     {
-                        Result = LeaseResult.Error
+                        Result = TransientErrorDetector.IsTransient(ex) ? LeaseResult.TransientError : LeaseResult.Error,
+                        Message = ex.ToString()
                     };
                 }
             }
@@ -125,20 +130,21 @@ WHERE ResourceGroup = @ResourceGroup";
 
         public async Task<LeaseResponse> TryRenewLeaseAsync(RenewLeaseRequest renewLeaseRequest)
         {
-            using (var conn = new SqlConnection(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await conn.OpenAsync();
                 var transaction = conn.BeginTransaction(IsolationLevel.Serializable);
                 var command = conn.CreateCommand();
                 command.Transaction = transaction;
 
                 try
                 {
+                    // obtain lock on the record blocking other nodes until the transaction is committed
                     command.CommandText = "UPDATE ResourceGroups SET LockedByClient = @ClientId WHERE ResourceGroup = @ResourceGroup";
                     command.Parameters.AddWithValue("@ClientId", renewLeaseRequest.ClientId);
                     command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = renewLeaseRequest.ResourceGroup;
                     await command.ExecuteNonQueryAsync();
 
+                    // get the resource group
                     command.Parameters.Clear();
                     command.CommandText = @"SELECT [ResourceGroup]
       ,[CoordinatorId]
@@ -174,6 +180,7 @@ WHERE ResourceGroup = @ResourceGroup";
                     if (rg == null)
                         return new LeaseResponse() { Result = LeaseResult.NoLease };
 
+                    // determine the response, if the CoordinatorId matches the current client id and the fencing token is the same then grant, else deny
                     var response = new LeaseResponse();
                     response.Lease = new Lease();
                     if (!rg.CoordinatorId.Equals(renewLeaseRequest.ClientId) || rg.FencingToken > renewLeaseRequest.FencingToken)
@@ -217,7 +224,8 @@ WHERE ResourceGroup = @ResourceGroup";
 
                     return new LeaseResponse()
                     {
-                        Result = LeaseResult.Error
+                        Result = LeaseResult.Error,
+                        Message = ex.ToString()
                     };
                 }
             }

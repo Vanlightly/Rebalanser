@@ -9,6 +9,7 @@ namespace Rebalanser.SqlServer.Leases
         NoLease,
         Granted,
         Denied,
+        TransientError,
         Error
     }
 }

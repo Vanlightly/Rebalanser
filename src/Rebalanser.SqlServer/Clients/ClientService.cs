@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Rebalanser.Core;
+using Rebalanser.SqlServer.Connections;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
@@ -19,9 +21,8 @@ namespace Rebalanser.SqlServer.Clients
 
         public async Task CreateClientAsync(string resourceGroup, Guid clientId)
         {
-            using (var conn = new SqlConnection(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await conn.OpenAsync();
                 var command = conn.CreateCommand();
                 command.CommandText = @"INSERT INTO [RBR].[Clients]
            ([ClientId]
@@ -50,9 +51,8 @@ namespace Rebalanser.SqlServer.Clients
         public async Task<List<Client>> GetClientsAsync(string resourceGroup)
         {
             var clients = new List<Client>();
-            using (var conn = new SqlConnection(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await conn.OpenAsync();
                 var command = conn.CreateCommand();
                 command.CommandText = @"SELECT [ClientId]
       ,[LastKeepAlive]
@@ -83,9 +83,8 @@ WHERE ResourceGroup = @ResourceGroup";
 
         public async Task<Client> KeepAliveAsync(Guid clientId)
         {
-            using (var conn = new SqlConnection(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await conn.OpenAsync();
                 var command = conn.CreateCommand();
                 command.CommandText = @"UPDATE [RBR].[Clients]
    SET [LastKeepAlive] = GETUTCDATE()
@@ -108,14 +107,13 @@ WHERE ClientId = @ClientId";
                 }
             }
 
-            throw new Exception("No client with this id!");
+            throw new RebalanserException($"No client exists with id {clientId}");
         }
 
         public async Task SetClientStatusAsync(Guid clientId, ClientStatus clientStatus)
         {
-            using (var conn = new SqlConnection(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await conn.OpenAsync();
                 var command = conn.CreateCommand();
                 command.CommandText = @"UPDATE [RBR].[Clients]
    SET [ClientStatus] = @ClientStatus
@@ -129,9 +127,8 @@ WHERE ClientId = @ClientId";
 
         public async Task<ModifyClientResult> StartActivityAsync(int fencingToken, List<ClientStartRequest> clientStartRequests)
         {
-            using (var conn = new SqlConnection(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await conn.OpenAsync();
                 var command = conn.CreateCommand();
                 command.CommandText = @"UPDATE [RBR].[Clients]
    SET [CoordinatorStatus] = @CoordinatorStatus
@@ -159,9 +156,8 @@ SELECT @@ROWCOUNT";
 
         public async Task<ModifyClientResult> StopActivityAsync(int fencingToken, List<Client> clients)
         {
-            using (var conn = new SqlConnection(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                await conn.OpenAsync();
                 var command = conn.CreateCommand();
                 command.CommandText = GetSetStatusQuery(clients);
                 command.Parameters.Add("@CoordinatorStatus", SqlDbType.TinyInt).Value = CoordinatorStatus.StopActivity;

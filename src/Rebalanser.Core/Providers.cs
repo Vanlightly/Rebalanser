@@ -14,7 +14,7 @@ namespace Rebalanser.Core
         public static IRebalanserProvider GetProvider()
         {
             if (RebalanserProvider == null)
-                throw new Exception("No registered!");
+                throw new ProviderException("No provider registered!");
 
             return RebalanserProvider;
         }

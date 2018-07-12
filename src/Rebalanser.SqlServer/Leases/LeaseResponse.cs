@@ -8,5 +8,12 @@ namespace Rebalanser.SqlServer.Leases
     {
         public LeaseResult Result { get; set; }
         public Lease Lease { get; set; }
+        public string Message { get; set; }
+
+        public bool IsErrorResponse()
+        {
+            return Result == LeaseResult.TransientError
+                || Result == LeaseResult.Error;
+        }
     }
 }

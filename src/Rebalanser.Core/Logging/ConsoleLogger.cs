@@ -16,6 +16,11 @@ namespace Rebalanser.Core.Logging
             this.logLevel = LogLevel.DEBUG;
         }
 
+        public ConsoleLogger(LogLevel logLevel)
+        {
+            this.logLevel = logLevel;
+        }
+
         public void Error(string text)
         {
             if ((int)this.logLevel <= 3)
