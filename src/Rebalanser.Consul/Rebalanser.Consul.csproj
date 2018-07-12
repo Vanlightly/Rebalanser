@@ -12,4 +12,8 @@
     <ProjectReference Include="..\Rebalanser.Core\Rebalanser.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Client\" />
+  </ItemGroup>
+
 </Project>

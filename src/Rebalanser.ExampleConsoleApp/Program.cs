@@ -43,7 +43,6 @@ namespace Rebalanser.RabbitMq.ExampleWithSqlServerBackend
 
         private static async Task RunAsync()
         {
-            //InitializeScenario(2);
             Providers.Register(new SqlServerProvider("Server=(local);Database=RabbitMqScaling;Trusted_Connection=true;"));
             clientTasks = new List<ClientTask>();
             var cts = new CancellationTokenSource();

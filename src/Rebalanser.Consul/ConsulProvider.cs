@@ -1,7 +1,9 @@
 ﻿using Consul;
 using Rebalanser.Consul.ResourceGroups;
+using Rebalanser.Consul.Resources;
 using Rebalanser.Consul.Roles;
 using Rebalanser.Core;
+using Rebalanser.Core.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -13,13 +15,20 @@ namespace Rebalanser.Consul
 {
     public class ConsulProvider : IRebalanserProvider
     {
+        private ILogger logger;
         private string consulServerUrl;
         private IResourceGroupService resourceGroupService;
 
         public ConsulProvider(string consulServerUrl,
-            IResourceGroupService resourceGroupService)
+            ILogger logger = null,
+            IResourceGroupService resourceGroupService = null)
         {
             this.consulServerUrl = consulServerUrl;
+
+            if (logger == null)
+                this.logger = new NullLogger();
+            else
+                this.logger = logger;
 
             if (resourceGroupService == null)
                 this.resourceGroupService = new ResourceGroupService();
@@ -136,17 +145,17 @@ namespace Rebalanser.Consul
                         {
                             if (clientEvent.EventType == EventType.Coordinator)
                             {
-                                await this.coordinator.ExecuteCoordinatorRoleAsync(this.clientId,
-                                        clientEvent,
-                                        onChangeActions,
-                                        token);
+                                //await this.coordinator.ExecuteCoordinatorRoleAsync(this.clientId,
+                                //        clientEvent,
+                                //        onChangeActions,
+                                //        token);
                             }
                             else
                             {
-                                await this.follower.ExecuteFollowerRoleAsync(this.clientId,
-                                        clientEvent,
-                                        onChangeActions,
-                                        token);
+                                //await this.follower.ExecuteFollowerRoleAsync(this.clientId,
+                                //        clientEvent,
+                                //        onChangeActions,
+                                //        token);
                             }
                         }
                         else
@@ -161,6 +170,11 @@ namespace Rebalanser.Consul
                     }
                 }
             });
+        }
+
+        private async Task<ResourceGroup> GetResourceGroupAsync(ConsulClient consulClient, string resourceGroup)
+        {
+            throw new NotImplementedException();
         }
 
         private async Task WaitFor(TimeSpan delayPeriod, CancellationToken token)
