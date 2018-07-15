@@ -98,33 +98,74 @@ namespace Rebalanser.SqlServer
 
                     if (token.IsCancellationRequested)
                     {
-                        logger.Error("Context shutting down due to cancellation");
+                        logger.Info("Context shutting down due to cancellation");
                     }
                     else
                     {
                         if (leaderElectionTask.IsFaulted)
-                        {
-                            logger.Error("Shutdown due to leader election task fault");
-                        }
+                            await NotifyOfErrorAsync(leaderElectionTask, "Shutdown due to leader election task fault", onChangeActions);
                         else if (roleTask.IsFaulted)
-                        {
-                            logger.Error("Shutdown due to role task fault");
-                        }
+                            await NotifyOfErrorAsync(roleTask, "Shutdown due to coordinator/follower task fault", onChangeActions);
                         else
-                        {
-                            logger.Error("Unknown shutdown reason");
-                        }
-
-                        await leaderElectionTask;
-                        await roleTask;
+                            NotifyOfError(onChangeActions, "Unknown shutdown reason", null);
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger.Error(ex.ToString());
+                    NotifyOfError(onChangeActions, "An unexpected error has caused shutdown", ex);
                 }
             });
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+        }
+
+        private async Task NotifyOfErrorAsync(Task faultedTask, string message, OnChangeActions onChangeActions)
+        {
+            await InvokeOnErrorAsync(faultedTask, message, onChangeActions);
+            InvokeOnStop(onChangeActions);
+        }
+
+        private void NotifyOfError(OnChangeActions onChangeActions, string message, Exception exception)
+        {
+            InvokeOnError(onChangeActions, message, exception);
+            InvokeOnStop(onChangeActions);
+        }
+
+        private async Task InvokeOnErrorAsync(Task faultedTask, string message, OnChangeActions onChangeActions)
+        {
+            try
+            {
+                await faultedTask;
+            }
+            catch (Exception ex)
+            {
+                InvokeOnError(onChangeActions, message, ex);
+            }
+        }
+
+        private void InvokeOnError(OnChangeActions onChangeActions, string message, Exception exception)
+        {
+            try
+            {
+                foreach (var onErrorAction in onChangeActions.OnErrorActions)
+                    onErrorAction.Invoke(message, exception);
+            }
+            catch (Exception ex)
+            {
+                this.logger.Error(ex.ToString());
+            }
+        }
+
+        private void InvokeOnStop(OnChangeActions onChangeActions)
+        {
+            try
+            {
+                foreach (var onErrorAction in onChangeActions.OnStopActions)
+                    onErrorAction.Invoke();
+            }
+            catch (Exception ex)
+            {
+                this.logger.Error(ex.ToString());
+            }
         }
 
         private Task StartLeadershipTask(CancellationToken token,
@@ -132,64 +173,87 @@ namespace Rebalanser.SqlServer
         {
             return Task.Run(async () =>
             {
-                while (!token.IsCancellationRequested)
+                try
                 {
-                    var request = new AcquireLeaseRequest()
+                    while (!token.IsCancellationRequested)
                     {
-                        ClientId = this.clientId,
-                        ResourceGroup = this.resourceGroup
-                    };
-                    var response = await TryAcquireLeaseAsync(request);
-                    if (response.Result == LeaseResult.Granted)
-                    {
-                        var lease = response.Lease;
-                        var coordinatorToken = new CoordinatorToken();
-                        PostLeaderEvent(lease.FencingToken, lease.ExpiryPeriod, coordinatorToken, clientEvents);
-                        await WaitFor(GetInterval(lease.ExpiryPeriod), token, coordinatorToken);
-
-                        // lease renewal loop
-                        while (!token.IsCancellationRequested && !coordinatorToken.FencingTokenViolation)
+                        var request = new AcquireLeaseRequest()
                         {
-                            response = await TryRenewLeaseAsync(new RenewLeaseRequest() { ClientId = this.clientId, ResourceGroup = this.resourceGroup, FencingToken = lease.FencingToken });
-                            if (response.Result == LeaseResult.Granted)
-                            {
-                                PostLeaderEvent(lease.FencingToken, lease.ExpiryPeriod, coordinatorToken, clientEvents);
-                                await WaitFor(GetInterval(lease.ExpiryPeriod), token, coordinatorToken);
-                            }
-                            else if (response.Result == LeaseResult.Denied)
-                            {
-                                PostFollowerEvent(lease.ExpiryPeriod, clientEvents);
-                                await WaitFor(GetInterval(lease.ExpiryPeriod), token);
-                                break;
-                            }
-                            else
-                            {
-                                // log it, failure scenario
-                                PostFollowerEvent(lease.ExpiryPeriod, clientEvents);
-                                await WaitFor(GetInterval(lease.ExpiryPeriod), token);
-                                break;
-                            }
+                            ClientId = this.clientId,
+                            ResourceGroup = this.resourceGroup
+                        };
+                        var response = await TryAcquireLeaseAsync(request, token);
+                        if (response.Result == LeaseResult.Granted) // is now the Coordinator
+                        {
+                            await ExecuteLeaseRenewals(token, clientEvents, response.Lease);
+                        }
+                        else if (response.Result == LeaseResult.Denied) // is a Follower
+                        {
+                            PostFollowerEvent(response.Lease.ExpiryPeriod, clientEvents);
+                            await WaitFor(GetInterval(response.Lease.ExpiryPeriod), token);
+                        }
+                        else if (response.Result == LeaseResult.NoLease)
+                        {
+                            throw new RebalanserException($"The resource group {this.resourceGroup} does not exist.");
+                        }
+                        else if (response.IsErrorResponse())
+                        {
+                            throw new RebalanserException("An non-recoverable error occurred.", response.Exception);
+                        }
+                        else
+                        {
+                            throw new RebalanserException("A non-supported lease result was received"); // should never happen, just in case I screw up in the future
                         }
                     }
-                    else if (response.Result == LeaseResult.Denied)
-                    {
-                        PostFollowerEvent(response.Lease.ExpiryPeriod, clientEvents);
-                        await WaitFor(GetInterval(response.Lease.ExpiryPeriod), token);
-                    }
-                    else
-                    {
-                        // log it, this is a failure scenario
-                        PostFollowerEvent(response.Lease.ExpiryPeriod, clientEvents);
-                        await WaitFor(GetInterval(response.Lease.ExpiryPeriod), token);
-                    }
                 }
-
-                clientEvents.CompleteAdding();
+                finally
+                {
+                    clientEvents.CompleteAdding();
+                }
             });
         }
 
-        private async Task<LeaseResponse> TryAcquireLeaseAsync(AcquireLeaseRequest request)
+        private async Task ExecuteLeaseRenewals(CancellationToken token,
+            BlockingCollection<ClientEvent> clientEvents,
+            Lease lease)
         {
+            var coordinatorToken = new CoordinatorToken();
+            PostLeaderEvent(lease.FencingToken, lease.ExpiryPeriod, coordinatorToken, clientEvents);
+            await WaitFor(GetInterval(lease.ExpiryPeriod), token, coordinatorToken);
+
+            // lease renewal loop
+            while (!token.IsCancellationRequested && !coordinatorToken.FencingTokenViolation)
+            {
+                var response = await TryRenewLeaseAsync(new RenewLeaseRequest() { ClientId = this.clientId, ResourceGroup = this.resourceGroup, FencingToken = lease.FencingToken }, token);
+                if (response.Result == LeaseResult.Granted)
+                {
+                    PostLeaderEvent(lease.FencingToken, lease.ExpiryPeriod, coordinatorToken, clientEvents);
+                    await WaitFor(GetInterval(lease.ExpiryPeriod), token, coordinatorToken);
+                }
+                else if (response.Result == LeaseResult.Denied)
+                {
+                    PostFollowerEvent(lease.ExpiryPeriod, clientEvents);
+                    await WaitFor(GetInterval(lease.ExpiryPeriod), token);
+                    break;
+                }
+                else if (response.Result == LeaseResult.NoLease)
+                {
+                    throw new RebalanserException($"The resource group {this.resourceGroup} does not exist.");
+                }
+                else if (response.IsErrorResponse())
+                {
+                    throw new RebalanserException("An non-recoverable error occurred.", response.Exception);
+                }
+                else
+                {
+                    throw new RebalanserException("A non-supported lease result was received"); // should never happen, just in case I screw up in the future
+                }
+            }
+        }
+
+        private async Task<LeaseResponse> TryAcquireLeaseAsync(AcquireLeaseRequest request, CancellationToken token)
+        {
+            int delaySeconds = 2;
             int triesLeft = 3;
             while (triesLeft > 0)
             {
@@ -198,20 +262,20 @@ namespace Rebalanser.SqlServer
                 if (response.Result != LeaseResult.TransientError)
                     return response;
                 else if (triesLeft > 0)
-                    await Task.Delay(2000);
+                    await WaitFor(TimeSpan.FromSeconds(delaySeconds), token);
                 else
                     return response;
+
+                delaySeconds = delaySeconds * 2;
             }
 
             // this should never happen
-            return new LeaseResponse()
-            {
-                Result = LeaseResult.Error
-            };
+            return new LeaseResponse() { Result = LeaseResult.Error };
         }
 
-        private async Task<LeaseResponse> TryRenewLeaseAsync(RenewLeaseRequest request)
+        private async Task<LeaseResponse> TryRenewLeaseAsync(RenewLeaseRequest request, CancellationToken token)
         {
+            int delaySeconds = 2;
             int triesLeft = 3;
             while (triesLeft > 0)
             {
@@ -220,16 +284,15 @@ namespace Rebalanser.SqlServer
                 if (response.Result != LeaseResult.TransientError)
                     return response;
                 else if (triesLeft > 0)
-                    await Task.Delay(2000);
+                    await WaitFor(TimeSpan.FromSeconds(delaySeconds), token);
                 else
                     return response;
+
+                delaySeconds = delaySeconds * 2;
             }
 
             // this should never happen
-            return new LeaseResponse()
-            {
-                Result = LeaseResult.Error
-            };
+            return new LeaseResponse() { Result = LeaseResult.Error };
         }
 
         private TimeSpan GetInterval(TimeSpan leaseExpiry)
@@ -277,45 +340,37 @@ namespace Rebalanser.SqlServer
             {
                 while (!token.IsCancellationRequested && !clientEvents.IsAddingCompleted)
                 {
-                    try
+                    // take the most recent event, if multiple are queued up then we only need the latest
+                    ClientEvent clientEvent = null;
+                    while (clientEvents.Any())
                     {
-                        // take the most recent event, if multiple are queued up then we only need the latest
-                        ClientEvent clientEvent = null;
-                        while (clientEvents.Any())
+                        try
                         {
-                            try
-                            {
-                                clientEvent = clientEvents.Take(token);
-                            }
-                            catch (OperationCanceledException) { }
+                            clientEvent = clientEvents.Take(token);
                         }
+                        catch (OperationCanceledException) { }
+                    }
 
-                        // if there was an event then call the appropriate role beahvaiour
-                        if (clientEvent != null)
+                    // if there was an event then call the appropriate role beahvaiour
+                    if (clientEvent != null)
+                    {
+                        if (clientEvent.EventType == EventType.Coordinator)
                         {
-                            if (clientEvent.EventType == EventType.Coordinator)
-                            {
-                                await this.coordinator.ExecuteCoordinatorRoleAsync(this.clientId,
-                                        clientEvent,
-                                        onChangeActions,
-                                        token);
-                            }
-                            else
-                            {
-                                await this.follower.ExecuteFollowerRoleAsync(this.clientId,
-                                        clientEvent,
-                                        onChangeActions,
-                                        token);
-                            }
+                            await this.coordinator.ExecuteCoordinatorRoleAsync(this.clientId,
+                                    clientEvent,
+                                    onChangeActions,
+                                    token);
                         }
                         else
                         {
-                            await WaitFor(TimeSpan.FromSeconds(1), token);
+                            await this.follower.ExecuteFollowerRoleAsync(this.clientId,
+                                    clientEvent,
+                                    onChangeActions,
+                                    token);
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        this.logger.Error(ex);
                         await WaitFor(TimeSpan.FromSeconds(1), token);
                     }
                 }

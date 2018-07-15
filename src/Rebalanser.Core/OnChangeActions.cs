@@ -10,10 +10,12 @@ namespace Rebalanser.Core
         {
             OnStartActions = new List<Action>();
             OnStopActions = new List<Action>();
+            OnErrorActions = new List<Action<string, Exception>>();
         }
 
         public List<Action> OnStartActions { get; set; }
         public List<Action> OnStopActions { get; set; }
+        public List<Action<string, Exception>> OnErrorActions { get; set; }
 
         public void AddOnStartAction(Action action)
         {
@@ -23,6 +25,11 @@ namespace Rebalanser.Core
         public void AddOnStopAction(Action action)
         {
             OnStopActions.Add(action);
+        }
+
+        public void AddOnErrorAction(Action<string, Exception> action)
+        {
+            OnErrorActions.Add(action);
         }
     }
 }

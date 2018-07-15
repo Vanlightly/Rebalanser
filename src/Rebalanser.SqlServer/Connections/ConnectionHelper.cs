@@ -27,8 +27,8 @@ namespace Rebalanser.SqlServer.Connections
                         if (tries == 3)
                             throw;
 
-                        // wait 1, 3, 9 seconds -- need to consider how this might affect cancellation
-                        await Task.Delay(TimeSpan.FromSeconds(tries * 3));
+                        // wait 1, 2, 4 seconds -- would be nice to not to delay cancellation here
+                        await Task.Delay(TimeSpan.FromSeconds(tries * 2));
                     }
                     else
                         throw;

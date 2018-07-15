@@ -30,6 +30,11 @@ namespace Rebalanser.Core
         public event EventHandler OnAssignment;
 
         /// <summary>
+        /// Called when a non recoverable error occurs
+        /// </summary>
+        public event EventHandler OnError;
+
+        /// <summary>
         /// Starts the node
         /// </summary>
         /// <param name="resourceGroup">The id of the resource group</param>

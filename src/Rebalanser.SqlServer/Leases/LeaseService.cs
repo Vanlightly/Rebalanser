@@ -23,10 +23,10 @@ namespace Rebalanser.SqlServer.Leases
 
         public async Task<LeaseResponse> TryAcquireLeaseAsync(AcquireLeaseRequest acquireLeaseRequest)
         {
-            using (var con = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
+            using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
             {
-                var transaction = con.BeginTransaction(IsolationLevel.Serializable);
-                var command = con.CreateCommand();
+                var transaction = conn.BeginTransaction(IsolationLevel.Serializable);
+                var command = conn.CreateCommand();
                 command.Transaction = transaction;
 
                 try
@@ -122,7 +122,8 @@ WHERE ResourceGroup = @ResourceGroup";
                     return new LeaseResponse()
                     {
                         Result = TransientErrorDetector.IsTransient(ex) ? LeaseResult.TransientError : LeaseResult.Error,
-                        Message = ex.ToString()
+                        Message = "Lease acquisition failure",
+                        Exception = ex
                     };
                 }
             }
@@ -225,7 +226,8 @@ WHERE ResourceGroup = @ResourceGroup";
                     return new LeaseResponse()
                     {
                         Result = LeaseResult.Error,
-                        Message = ex.ToString()
+                        Message = ex.ToString(),
+                        Exception = ex
                     };
                 }
             }
