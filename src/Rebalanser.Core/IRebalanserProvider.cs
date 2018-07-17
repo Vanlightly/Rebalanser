@@ -8,7 +8,7 @@ namespace Rebalanser.Core
 {
     public interface IRebalanserProvider
     {
-        Task StartAsync(string group, OnChangeActions onChangeActions, CancellationToken token);
+        Task StartAsync(string group, OnChangeActions onChangeActions, CancellationToken token, ContextOptions contextOptions);
         IList<string> GetAssignedResources();
         IList<string> GetAssignedResources(CancellationToken token);
     }

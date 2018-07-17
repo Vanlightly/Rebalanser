@@ -67,7 +67,8 @@ namespace Rebalanser.SqlServer
 
         public async Task StartAsync(string resourceGroup,
             OnChangeActions onChangeActions,
-            CancellationToken token)
+            CancellationToken parentToken,
+            ContextOptions contextOptions)
         {
             // just in case someone does something "clever"
             lock (startLockObj)
@@ -82,55 +83,72 @@ namespace Rebalanser.SqlServer
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
             Task.Run(async () =>
             {
-                try
+                while (!parentToken.IsCancellationRequested)
                 {
-                    var clientEvents = new BlockingCollection<ClientEvent>();
-
-                    var leaderElectionTask = StartLeadershipTask(token, clientEvents);
-                    var roleTask = StartRoleTask(token, onChangeActions, clientEvents);
-
-                    while (!token.IsCancellationRequested
-                        && !leaderElectionTask.IsCompleted
-                        && !clientEvents.IsCompleted)
+                    var childTaskCts = new CancellationTokenSource();
+                    try
                     {
-                        await Task.Delay(100);
-                    }
+                        var clientEvents = new BlockingCollection<ClientEvent>();
 
-                    if (token.IsCancellationRequested)
-                    {
-                        logger.Info("Context shutting down due to cancellation");
-                    }
-                    else
-                    {
-                        if (leaderElectionTask.IsFaulted)
-                            await NotifyOfErrorAsync(leaderElectionTask, "Shutdown due to leader election task fault", onChangeActions);
-                        else if (roleTask.IsFaulted)
-                            await NotifyOfErrorAsync(roleTask, "Shutdown due to coordinator/follower task fault", onChangeActions);
+                        var leaderElectionTask = StartLeadershipTask(childTaskCts.Token, clientEvents);
+                        var roleTask = StartRoleTask(childTaskCts.Token, onChangeActions, clientEvents);
+
+                        while (!parentToken.IsCancellationRequested
+                            && !leaderElectionTask.IsCompleted
+                            && !clientEvents.IsCompleted)
+                        {
+                            await Task.Delay(100);
+                        }
+
+                        // cancel child tasks
+                        childTaskCts.Cancel();
+
+                        if (parentToken.IsCancellationRequested)
+                        {
+                            logger.Info("Context shutting down due to cancellation");
+                        }
                         else
-                            NotifyOfError(onChangeActions, "Unknown shutdown reason", null);
+                        {
+                            if (leaderElectionTask.IsFaulted)
+                                await NotifyOfErrorAsync(leaderElectionTask, "Shutdown due to leader election task fault", contextOptions.AutoRecoveryOnError, onChangeActions);
+                            else if (roleTask.IsFaulted)
+                                await NotifyOfErrorAsync(roleTask, "Shutdown due to coordinator/follower task fault", contextOptions.AutoRecoveryOnError, onChangeActions);
+                            else
+                                NotifyOfError(onChangeActions, "Unknown shutdown reason", contextOptions.AutoRecoveryOnError, null);
+
+                            if (contextOptions.AutoRecoveryOnError)
+                                await WaitFor(contextOptions.RestartDelay, parentToken);
+                            else
+                                break;
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    NotifyOfError(onChangeActions, "An unexpected error has caused shutdown", ex);
+                    catch (Exception ex)
+                    {
+                        NotifyOfError(onChangeActions, $"An unexpected error has caused shutdown. Automatic restart is set to {contextOptions.AutoRecoveryOnError}", contextOptions.AutoRecoveryOnError, ex);
+
+                        if (contextOptions.AutoRecoveryOnError)
+                            await WaitFor(contextOptions.RestartDelay, parentToken);
+                        else
+                            break;
+                    }
                 }
             });
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
         }
 
-        private async Task NotifyOfErrorAsync(Task faultedTask, string message, OnChangeActions onChangeActions)
+        private async Task NotifyOfErrorAsync(Task faultedTask, string message, bool autoRecoveryEnabled, OnChangeActions onChangeActions)
         {
-            await InvokeOnErrorAsync(faultedTask, message, onChangeActions);
+            await InvokeOnErrorAsync(faultedTask, message, autoRecoveryEnabled, onChangeActions);
             InvokeOnStop(onChangeActions);
         }
 
-        private void NotifyOfError(OnChangeActions onChangeActions, string message, Exception exception)
+        private void NotifyOfError(OnChangeActions onChangeActions, string message, bool autoRecoveryEnabled, Exception exception)
         {
-            InvokeOnError(onChangeActions, message, exception);
+            InvokeOnError(onChangeActions, message, autoRecoveryEnabled, exception);
             InvokeOnStop(onChangeActions);
         }
 
-        private async Task InvokeOnErrorAsync(Task faultedTask, string message, OnChangeActions onChangeActions)
+        private async Task InvokeOnErrorAsync(Task faultedTask, string message, bool autoRecoveryEnabled, OnChangeActions onChangeActions)
         {
             try
             {
@@ -138,16 +156,16 @@ namespace Rebalanser.SqlServer
             }
             catch (Exception ex)
             {
-                InvokeOnError(onChangeActions, message, ex);
+                InvokeOnError(onChangeActions, message, autoRecoveryEnabled, ex);
             }
         }
 
-        private void InvokeOnError(OnChangeActions onChangeActions, string message, Exception exception)
+        private void InvokeOnError(OnChangeActions onChangeActions, string message, bool autoRecoveryEnabled, Exception exception)
         {
             try
             {
                 foreach (var onErrorAction in onChangeActions.OnErrorActions)
-                    onErrorAction.Invoke(message, exception);
+                    onErrorAction.Invoke(message, autoRecoveryEnabled, exception);
             }
             catch (Exception ex)
             {

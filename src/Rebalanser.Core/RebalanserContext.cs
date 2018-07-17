@@ -32,20 +32,21 @@ namespace Rebalanser.Core
         /// <summary>
         /// Called when a non recoverable error occurs
         /// </summary>
-        public event EventHandler OnError;
+        public event EventHandler<OnErrorArgs> OnError;
 
         /// <summary>
         /// Starts the node
         /// </summary>
         /// <param name="resourceGroup">The id of the resource group</param>
         /// <returns></returns>
-        public async Task StartAsync(string resourceGroup)
+        public async Task StartAsync(string resourceGroup, ContextOptions contextOptions)
         {
             this.cts = new CancellationTokenSource();
             var onChangeActions = new OnChangeActions();
             onChangeActions.AddOnStartAction(StartActivity);
             onChangeActions.AddOnStopAction(CancelActivity);
-            await this.rebalanserProvider.StartAsync(resourceGroup, onChangeActions, this.cts.Token);
+            onChangeActions.AddOnErrorAction(RaiseError);
+            await this.rebalanserProvider.StartAsync(resourceGroup, onChangeActions, this.cts.Token, contextOptions);
         }
 
         /// <summary>
@@ -87,6 +88,16 @@ namespace Rebalanser.Core
         protected virtual void RaiseOnCancelAssignment(EventArgs e)
         {
             OnCancelAssignment?.Invoke(this, e);
+        }
+
+        private void RaiseError(string message, bool autoRecoveryEnabled, Exception ex)
+        {
+            RaiseOnError(new OnErrorArgs(message, autoRecoveryEnabled, ex));
+        }
+
+        protected virtual void RaiseOnError(OnErrorArgs e)
+        {
+            OnError?.Invoke(this, e);
         }
 
         private void StartActivity()

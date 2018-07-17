@@ -36,7 +36,7 @@ namespace Rebalanser.Consul
                 this.resourceGroupService = resourceGroupService;
         }
 
-        public async Task StartAsync(string group, OnChangeActions onChangeActions, CancellationToken token)
+        public async Task StartAsync(string group, OnChangeActions onChangeActions, CancellationToken token, ContextOptions contextOptions)
         {
             throw new NotImplementedException();
         }

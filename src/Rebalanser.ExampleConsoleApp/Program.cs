@@ -45,7 +45,7 @@ namespace Rebalanser.RabbitMq.ExampleWithSqlServerBackend
         {
             Providers.Register(new SqlServerProvider("Server=(local);Database=RabbitMqScaling;Trusted_Connection=true;"));
             clientTasks = new List<ClientTask>();
-            var cts = new CancellationTokenSource();
+            
             using (var context = new RebalanserContext())
             {
                 context.OnAssignment += (sender, args) =>
@@ -63,10 +63,18 @@ namespace Rebalanser.RabbitMq.ExampleWithSqlServerBackend
                     StopConsuming();
                 };
 
-                await context.StartAsync("group1");
+                context.OnError += (sender, args) =>
+                {
+                    LogInfo($"Error: {args.Message}, automatic recovery set to: {args.AutoRecoveryEnabled}, Exception: {args.Exception.Message}");
+                };
+
+                await context.StartAsync("group1", new ContextOptions() { AutoRecoveryOnError = true, RestartDelay = TimeSpan.FromSeconds(30) });
 
                 Console.WriteLine("Press enter to shutdown");
-                var input = Console.ReadLine();
+                while (!Console.KeyAvailable)
+                {
+                    Thread.Sleep(100);
+                }
 
                 StopConsuming();
                 Task.WaitAll(clientTasks.Select(x => x.Client).ToArray());
@@ -107,7 +115,7 @@ namespace Rebalanser.RabbitMq.ExampleWithSqlServerBackend
                 }
 
                 if (cts.Token.IsCancellationRequested)
-                    LogInfo("Consumer cancelled for " + queueName);
+                    LogInfo("Cancellation signal received for " + queueName);
                 else
                     LogInfo("Consumer stopped for " + queueName);
             }, TaskCreationOptions.LongRunning);
