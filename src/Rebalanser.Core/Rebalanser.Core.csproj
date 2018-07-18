@@ -11,6 +11,7 @@
     <PackageProjectUrl>https://github.com/Vanlightly/Rebalanser</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Vanlightly/Rebalanser</RepositoryUrl>
     <RepositoryType>Git</RepositoryType>
+    <Description>Distribute a group of resources over a group of coordinating nodes.</Description>
   </PropertyGroup>
 
 </Project>

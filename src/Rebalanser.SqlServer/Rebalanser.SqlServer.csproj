@@ -11,6 +11,7 @@
     <PackageProjectUrl>https://github.com/Vanlightly/Rebalanser</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Vanlightly/Rebalanser</RepositoryUrl>
     <RepositoryType>Git</RepositoryType>
+    <Description>SQL Server backend for Rebalanser.Core</Description>
   </PropertyGroup>
 
   <ItemGroup>
