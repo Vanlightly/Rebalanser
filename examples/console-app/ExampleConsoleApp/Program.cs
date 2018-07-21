@@ -9,52 +9,29 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Rebalanser.RabbitMq.ExampleWithSqlServerBackend
+namespace ExampleConsoleApp
 {
     class Program
     {
+        private static List<ClientTask> clientTasks;
+
         static void Main(string[] args)
         {
+            Providers.Register(new SqlServerProvider("Server=(local);Database=RabbitMqScaling;Trusted_Connection=true;"));
             RunAsync().Wait();
         }
 
-        private static List<ClientTask> clientTasks;
-
-        //private static void InitializeScenario(int queueCount)
-        //{
-        //    var factory = new ConnectionFactory() { HostName = "localhost" };
-        //    using (var connection = factory.CreateConnection())
-        //    using (var channel = connection.CreateModel())
-        //    {
-        //        channel.ExchangeDeclare("RebalanserDemoEx", "x-consistent-hash", true, false, null);
-
-        //        for (int i = 1; i <= queueCount; i++)
-        //        {
-        //            channel.QueueDeclare(queue: "RebalanserQ" + i,
-        //                                 durable: false,
-        //                                 exclusive: false,
-        //                                 autoDelete: false,
-        //                                 arguments: null);
-        //            channel.QueueBind("RebalanserQ" + i, "RebalanserDemoEx", "10", null);
-        //        }
-        //    }
-
-        //}
-
         private static async Task RunAsync()
         {
-            Providers.Register(new SqlServerProvider("Server=(local);Database=RabbitMqScaling;Trusted_Connection=true;"));
             clientTasks = new List<ClientTask>();
-            
+
             using (var context = new RebalanserContext())
             {
                 context.OnAssignment += (sender, args) =>
                 {
                     var queues = context.GetAssignedResources();
                     foreach (var queue in queues)
-                    {
-                        StartConsuming(queue);
-                    }
+                        StartConsumingQueue(queue);
                 };
 
                 context.OnCancelAssignment += (sender, args) =>
@@ -64,24 +41,22 @@ namespace Rebalanser.RabbitMq.ExampleWithSqlServerBackend
                 };
 
                 context.OnError += (sender, args) =>
-                {
                     LogInfo($"Error: {args.Message}, automatic recovery set to: {args.AutoRecoveryEnabled}, Exception: {args.Exception.Message}");
-                };
 
                 await context.StartAsync("NotificationsGroup", new ContextOptions() { AutoRecoveryOnError = true, RestartDelay = TimeSpan.FromSeconds(30) });
 
                 Console.WriteLine("Press enter to shutdown");
                 while (!Console.KeyAvailable)
-                {
-                    Thread.Sleep(100);
-                }
+                    await Task.Delay(100);
 
                 StopAllConsumption();
                 Task.WaitAll(clientTasks.Select(x => x.Client).ToArray());
             }
+
+            await Task.Delay(10000);
         }
 
-        private static void StartConsuming(string queueName)
+        private static void StartConsumingQueue(string queueName)
         {
             LogInfo("Subscription started for queue: " + queueName);
             var cts = new CancellationTokenSource();
@@ -126,9 +101,7 @@ namespace Rebalanser.RabbitMq.ExampleWithSqlServerBackend
         private static void StopAllConsumption()
         {
             foreach (var ct in clientTasks)
-            {
                 ct.Cts.Cancel();
-            }
         }
 
         private static void LogInfo(string text)

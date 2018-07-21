@@ -30,6 +30,7 @@ namespace Rebalanser.SqlServer
         private bool started;
         private bool isCoordinator;
         private ResourceGroupStore store;
+        private Task mainTask;
 
         public SqlServerProvider(string connectionString,
             ILogger logger = null,
@@ -81,7 +82,7 @@ namespace Rebalanser.SqlServer
             await this.clientService.CreateClientAsync(this.resourceGroup, this.clientId);
 
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-            Task.Run(async () =>
+            mainTask = Task.Run(async () =>
             {
                 while (!parentToken.IsCancellationRequested)
                 {
@@ -121,6 +122,10 @@ namespace Rebalanser.SqlServer
                             else
                                 break;
                         }
+
+                        await leaderElectionTask;
+                        await roleTask;
+                        this.clientService.SetClientStatusAsync(this.clientId, ClientStatus.Terminated);
                     }
                     catch (Exception ex)
                     {
@@ -134,6 +139,18 @@ namespace Rebalanser.SqlServer
                 }
             });
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+        }
+
+        public async Task WaitForCompletionAsync()
+        {
+            try
+            {
+                await mainTask;
+            }
+            catch(Exception ex)
+            {
+
+            }
         }
 
         private async Task NotifyOfErrorAsync(Task faultedTask, string message, bool autoRecoveryEnabled, OnChangeActions onChangeActions)

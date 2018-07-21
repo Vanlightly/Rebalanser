@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Microsoft.Extensions.Configuration;
+using System;
+using System.IO;
 
 namespace Rebalanser.RabbitMQTools
 {
@@ -6,62 +8,100 @@ namespace Rebalanser.RabbitMQTools
     {
         static void Main(string[] args)
         {
-            Console.WriteLine("Choose your backend [sql/consul]:");
-            string backend = Console.ReadLine();
-
-            Console.WriteLine("Enter your consumer group:");
-            string consumerGroup = Console.ReadLine();
-            QueueManager.EnsureResourceGroup(consumerGroup);
-
-            while (true)
+            if (args.Length == 0)
             {
-                if (backend.Equals("sql"))
-                {
-                    QueueManager.ReconcileQueuesSqlAsync(consumerGroup).Wait();
-
-                    Console.WriteLine("+ to add a queue, - to remove, s rk 10 to send messages, l to list queues in each store, q to quit");
-                    var input = Console.ReadLine();
-
-                    if (input == "+")
-                        QueueManager.AddQueueSqlAsync(consumerGroup).Wait();
-                    else if (input == "-")
-                        QueueManager.RemoveQueueSqlAsync(consumerGroup).Wait();
-                    else if (input == "q")
-                        break;
-                    else if (input.StartsWith("s"))
-                    {
-                        var rk = input.Split()[1];
-                        var count = int.Parse(input.Split()[2]);
-                        MessageManager.SendMessagesViaClient(consumerGroup + "Ex", rk, count);
-                    }
-
-                    var queues = QueueManager.GetQueuesAsync(consumerGroup).Result;
-                    Console.WriteLine(string.Join(',', queues));
-                }
-                else if (backend.Equals("consul"))
-                {
-                    QueueManager.ReconcileQueuesConsulAsync(consumerGroup).Wait();
-
-                    Console.WriteLine("+ to add a queue, - to remove, s rk 10 to send messages, l to list queues in each store, q to quit");
-                    var input = Console.ReadLine();
-
-                    if (input == "+")
-                        QueueManager.AddQueueConsulAsync(consumerGroup).Wait();
-                    else if (input == "-")
-                        QueueManager.RemoveQueueConsulAsync(consumerGroup).Wait();
-                    else if (input == "q")
-                        break;
-                    else if (input.StartsWith("s"))
-                    {
-                        var rk = input.Split()[1];
-                        var count = int.Parse(input.Split()[2]);
-                        MessageManager.SendMessagesViaClient(consumerGroup + "Ex", rk, count);
-                    }
-
-                    var queues = QueueManager.GetQueuesAsync(consumerGroup).Result;
-                    Console.WriteLine(string.Join(',', queues));
-                }
+                Console.WriteLine("Invalid command");
+                Environment.ExitCode = 1;
             }
+
+            var builder = new ConfigurationBuilder().AddCommandLine(args);
+            IConfigurationRoot configuration = builder.Build();
+
+            var command = GetMandatoryArg(configuration, "Command");
+            var backend = GetMandatoryArg(configuration, "Backend");
+            var connection = GetMandatoryArg(configuration, "ConnString");
+
+            var rabbitConn = new RabbitConnection()
+            {
+                Host = GetOptionalArg(configuration, "RabbitHost", "localhost"),
+                VirtualHost = GetOptionalArg(configuration, "RabbitVHost", "/"),
+                Username = GetOptionalArg(configuration, "RabbitUser", "guest"),
+                Password = GetOptionalArg(configuration, "RabbitPassword", "guest"),
+                Port = int.Parse(GetOptionalArg(configuration, "RabbitPort", "5672")),
+                ManagementPort = int.Parse(GetOptionalArg(configuration, "RabbitMgmtPort", "15672"))
+            };
+
+            var queueInventory = new QueueInventory()
+            {
+                ConsumerGroup = GetMandatoryArg(configuration, "ConsumerGroup"),
+                ExchangeName = GetMandatoryArg(configuration, "ExchangeName"),
+                QueueCount = int.Parse(GetMandatoryArg(configuration, "QueueCount")),
+                QueuePrefix = GetMandatoryArg(configuration, "QueuePrefix"),
+                LeaseExpirySeconds = int.Parse(GetMandatoryArg(configuration, "LeaseExpirySeconds"))
+            };
+
+            if (command.Equals("create", StringComparison.OrdinalIgnoreCase))
+            {
+                if (backend.Equals("mssql", StringComparison.OrdinalIgnoreCase))
+                    DeployQueuesWithSqlBackend(connection, rabbitConn, queueInventory);
+                else
+                    Console.WriteLine("Only mssql backend is supported");
+            }
+            else
+                Console.WriteLine("Only create command is supported");
+        }
+
+        public static void DeployQueuesWithSqlBackend(string connection, RabbitConnection rabbitConn, QueueInventory queueInventory)
+        {
+            try
+            {
+                QueueManager.Initialize(connection, rabbitConn);
+                QueueManager.EnsureResourceGroup(queueInventory.ConsumerGroup, queueInventory.LeaseExpirySeconds);
+
+                Console.WriteLine("Phase 1 - Reconcile Backend with existing RabbitMQ queues ---------");
+                QueueManager.ReconcileQueuesSqlAsync(queueInventory.ConsumerGroup, queueInventory.QueuePrefix).Wait();
+
+                Console.WriteLine("Phase 2 - Ensure supplied queue count is deployed ---------");
+                var existingQueues = QueueManager.GetQueuesAsync(queueInventory.QueuePrefix).Result;
+                if (existingQueues.Count > queueInventory.QueueCount)
+                {
+                    var queuesToRemove = existingQueues.Count - queueInventory.QueueCount;
+                    for (int i = 0; i < queuesToRemove; i++)
+                        QueueManager.RemoveQueueSqlAsync(queueInventory.ConsumerGroup, queueInventory.QueuePrefix).Wait();
+                }
+                else if (existingQueues.Count < queueInventory.QueueCount)
+                {
+                    var queuesToAdd = queueInventory.QueueCount - existingQueues.Count;
+                    for (int i = 0; i < queuesToAdd; i++)
+                        QueueManager.AddQueueSqlAsync(queueInventory.ConsumerGroup, queueInventory.ExchangeName, queueInventory.QueuePrefix).Wait();
+                }
+
+                Console.WriteLine("Complete");
+                Environment.ExitCode = 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
+                Environment.ExitCode = 1;
+            }
+        }
+
+        public static string GetMandatoryArg(IConfiguration configuration, string argName)
+        {
+            var value = configuration[argName];
+            if (string.IsNullOrEmpty(value))
+                throw new Exception($"No argument {argName}");
+
+            return value;
+        }
+
+        public static string GetOptionalArg(IConfiguration configuration, string argName, string defaultValue)
+        {
+            var value = configuration[argName];
+            if (string.IsNullOrEmpty(value))
+                return defaultValue;
+
+            return value;
         }
     }
 }

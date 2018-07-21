@@ -191,5 +191,10 @@ namespace Rebalanser.Consul
         {
             config.Address = new Uri(consulServerUrl);
         }
+
+        public Task WaitForCompletionAsync()
+        {
+            throw new NotImplementedException();
+        }
     }
 }

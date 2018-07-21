@@ -72,12 +72,19 @@ namespace Rebalanser.Core
             return this.rebalanserProvider.GetAssignedResources(token);
         }
 
+        private bool disposed;
         /// <summary>
-        /// Initiates a shutdown of the node. Note that this is asynchronous and the node may still be shutting down when this method completes.
+        /// Initiates a shutdown of the node.
         /// </summary>
         public void Dispose()
         {
-            this.cts.Cancel();
+            if (!disposed)
+            {
+                this.cts.Cancel(); // signals provider to stop
+                var completionTask = Task.Run(async () => await this.rebalanserProvider.WaitForCompletionAsync());
+                completionTask.Wait(5000); // waits for completion up to 5 seconds
+                disposed = true;
+            }
         }
 
         private void CancelActivity()
