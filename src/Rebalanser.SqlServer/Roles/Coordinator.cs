@@ -20,7 +20,7 @@ namespace Rebalanser.SqlServer.Roles
 
         private List<string> resources;
         private List<Guid> clients;
-        private int _currentFencingToken;
+        private int currentFencingToken;
 
         public Coordinator(ILogger logger,
             IResourceService resourceService,
@@ -37,7 +37,7 @@ namespace Rebalanser.SqlServer.Roles
 
         public int GetFencingToken()
         {
-            return _currentFencingToken;
+            return currentFencingToken;
         }
 
         public async Task ExecuteCoordinatorRoleAsync(Guid coordinatorClientId,
@@ -45,7 +45,7 @@ namespace Rebalanser.SqlServer.Roles
             OnChangeActions onChangeActions,
             CancellationToken token)
         {
-            _currentFencingToken = clientEvent.FencingToken;
+            currentFencingToken = clientEvent.FencingToken;
             var self = await clientService.KeepAliveAsync(coordinatorClientId);
             var resourcesNow = (await resourceService.GetResourcesAsync(clientEvent.ResourceGroup)).OrderBy(x => x).ToList();
             var clientsNow = await GetLiveClientsAsync(clientEvent, coordinatorClientId);
@@ -74,9 +74,14 @@ namespace Rebalanser.SqlServer.Roles
             }
         }
 
+        public int GetCurrentFencingToken()
+        {
+            return this.currentFencingToken;
+        }
+
         private async Task<List<Client>> GetLiveClientsAsync(ClientEvent clientEvent, Guid coordinatorClientId)
         {
-            var allClientsNow = (await clientService.GetClientsAsync(clientEvent.ResourceGroup))
+            var allClientsNow = (await clientService.GetActiveClientsAsync(clientEvent.ResourceGroup))
                                     .Where(x => x.ClientId != coordinatorClientId)
                                     .ToList();
 

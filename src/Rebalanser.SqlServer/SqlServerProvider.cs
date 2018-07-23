@@ -71,7 +71,7 @@ namespace Rebalanser.SqlServer
             CancellationToken parentToken,
             ContextOptions contextOptions)
         {
-            // just in case someone does something "clever"
+            // just in case someone does some concurrency
             lock (startLockObj)
             {
                 if (this.started)
@@ -125,7 +125,18 @@ namespace Rebalanser.SqlServer
 
                         await leaderElectionTask;
                         await roleTask;
+
                         this.clientService.SetClientStatusAsync(this.clientId, ClientStatus.Terminated);
+
+                        if (this.isCoordinator)
+                        {
+                            this.leaseService.RelinquishLeaseAsync(new RelinquishLeaseRequest()
+                            {
+                                ClientId = this.clientId,
+                                FencingToken = this.coordinator.GetCurrentFencingToken(),
+                                ResourceGroup = this.resourceGroup
+                            });
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -225,7 +236,7 @@ namespace Rebalanser.SqlServer
                         else if (response.Result == LeaseResult.Denied) // is a Follower
                         {
                             PostFollowerEvent(response.Lease.ExpiryPeriod, clientEvents);
-                            await WaitFor(GetInterval(response.Lease.ExpiryPeriod), token);
+                            await WaitFor(GetInterval(response.Lease.HeartbeatPeriod), token);
                         }
                         else if (response.Result == LeaseResult.NoLease)
                         {
@@ -254,7 +265,7 @@ namespace Rebalanser.SqlServer
         {
             var coordinatorToken = new CoordinatorToken();
             PostLeaderEvent(lease.FencingToken, lease.ExpiryPeriod, coordinatorToken, clientEvents);
-            await WaitFor(GetInterval(lease.ExpiryPeriod), token, coordinatorToken);
+            await WaitFor(GetInterval(lease.HeartbeatPeriod), token, coordinatorToken);
 
             // lease renewal loop
             while (!token.IsCancellationRequested && !coordinatorToken.FencingTokenViolation)
@@ -263,12 +274,12 @@ namespace Rebalanser.SqlServer
                 if (response.Result == LeaseResult.Granted)
                 {
                     PostLeaderEvent(lease.FencingToken, lease.ExpiryPeriod, coordinatorToken, clientEvents);
-                    await WaitFor(GetInterval(lease.ExpiryPeriod), token, coordinatorToken);
+                    await WaitFor(GetInterval(lease.HeartbeatPeriod), token, coordinatorToken);
                 }
                 else if (response.Result == LeaseResult.Denied)
                 {
                     PostFollowerEvent(lease.ExpiryPeriod, clientEvents);
-                    await WaitFor(GetInterval(lease.ExpiryPeriod), token);
+                    await WaitFor(GetInterval(lease.HeartbeatPeriod), token);
                     break;
                 }
                 else if (response.Result == LeaseResult.NoLease)

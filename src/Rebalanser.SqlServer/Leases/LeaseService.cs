@@ -46,6 +46,7 @@ namespace Rebalanser.SqlServer.Leases
       ,[LockedByClient]
       ,[FencingToken]
       ,[LeaseExpirySeconds]
+      ,[HeartbeatSeconds]
 	  ,GETUTCDATE() AS [TimeNow]
 FROM [RBR].[ResourceGroups]
 WHERE ResourceGroup = @ResourceGroup";
@@ -65,13 +66,14 @@ WHERE ResourceGroup = @ResourceGroup";
                                 TimeNow = (DateTime)reader["TimeNow"],
                                 LockedByClientId = GetGuidFromNullableGuid(reader, "LockedByClient"),
                                 FencingToken = (int)reader["FencingToken"],
-                                LeaseExpirySeconds = (int)reader["LeaseExpirySeconds"]
+                                LeaseExpirySeconds = (int)reader["LeaseExpirySeconds"],
+                                HeartbeatSeconds = (int)reader["HeartbeatSeconds"]
                             };
                         }
                     }
 
                     if (rg == null)
-                        return new LeaseResponse() { Result = LeaseResult.NoLease, Lease = new Lease() { ExpiryPeriod = TimeSpan.FromMinutes(1) } };
+                        return new LeaseResponse() { Result = LeaseResult.NoLease, Lease = new Lease() { ExpiryPeriod = TimeSpan.FromMinutes(1), HeartbeatPeriod = TimeSpan.FromSeconds(25) } };
 
                     // determine the response, if the CoordinatorId is empty or expired then grant, else deny
                     var response = new LeaseResponse();
@@ -81,6 +83,7 @@ WHERE ResourceGroup = @ResourceGroup";
                         response.Lease.ResourceGroup = acquireLeaseRequest.ResourceGroup;
                         response.Lease.ClientId = acquireLeaseRequest.ClientId;
                         response.Lease.ExpiryPeriod = TimeSpan.FromSeconds(rg.LeaseExpirySeconds);
+                        response.Lease.HeartbeatPeriod = TimeSpan.FromSeconds(rg.HeartbeatSeconds);
                         response.Lease.FencingToken = ++rg.FencingToken;
                         response.Result = LeaseResult.Granted;
 
@@ -100,6 +103,7 @@ WHERE ResourceGroup = @ResourceGroup";
                     else
                     {
                         response.Lease.ExpiryPeriod = TimeSpan.FromSeconds(rg.LeaseExpirySeconds);
+                        response.Lease.HeartbeatPeriod = TimeSpan.FromSeconds(rg.HeartbeatSeconds);
                         response.Result = LeaseResult.Denied;
                     }
 
@@ -154,6 +158,7 @@ WHERE ResourceGroup = @ResourceGroup";
       ,[LockedByClient]
       ,[FencingToken]
       ,[LeaseExpirySeconds]
+      ,[HeartbeatSeconds]
 	  ,GETUTCDATE() AS [TimeNow]
 FROM [RBR].[ResourceGroups]
 WHERE ResourceGroup = @ResourceGroup";
@@ -173,7 +178,8 @@ WHERE ResourceGroup = @ResourceGroup";
                                 TimeNow = (DateTime)reader["TimeNow"],
                                 LockedByClientId = GetGuidFromNullableGuid(reader, "LockedByClient"),
                                 FencingToken = (int)reader["FencingToken"],
-                                LeaseExpirySeconds = (int)reader["LeaseExpirySeconds"]
+                                LeaseExpirySeconds = (int)reader["LeaseExpirySeconds"],
+                                HeartbeatSeconds = (int)reader["HeartbeatSeconds"]
                             };
                         }
                     }
@@ -192,6 +198,7 @@ WHERE ResourceGroup = @ResourceGroup";
                         response.Lease.ResourceGroup = renewLeaseRequest.ResourceGroup;
                         response.Lease.ClientId = renewLeaseRequest.ClientId;
                         response.Lease.ExpiryPeriod = TimeSpan.FromSeconds(rg.LeaseExpirySeconds);
+                        response.Lease.HeartbeatPeriod = TimeSpan.FromSeconds(rg.HeartbeatSeconds);
                         response.Lease.FencingToken = rg.FencingToken;
                         response.Result = LeaseResult.Granted;
 

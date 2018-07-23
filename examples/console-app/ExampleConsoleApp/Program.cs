@@ -52,8 +52,6 @@ namespace ExampleConsoleApp
                 StopAllConsumption();
                 Task.WaitAll(clientTasks.Select(x => x.Client).ToArray());
             }
-
-            await Task.Delay(10000);
         }
 
         private static void StartConsumingQueue(string queueName)

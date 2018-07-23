@@ -14,5 +14,6 @@ namespace Rebalanser.SqlServer
         public Guid LockedByClientId { get; set; }
         public int FencingToken { get; set; }
         public int LeaseExpirySeconds { get; set; }
+        public int HeartbeatSeconds { get; set; }
     }
 }

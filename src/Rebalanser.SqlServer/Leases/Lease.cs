@@ -8,5 +8,6 @@ namespace Rebalanser.SqlServer.Leases
         public Guid ClientId { get; set; }
         public int FencingToken { get; set; }
         public TimeSpan ExpiryPeriod { get; set; }
+        public TimeSpan HeartbeatPeriod { get; set; }
     }
 }

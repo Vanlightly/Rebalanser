@@ -48,7 +48,7 @@ namespace Rebalanser.SqlServer.Clients
             }
         }
 
-        public async Task<List<Client>> GetClientsAsync(string resourceGroup)
+        public async Task<List<Client>> GetActiveClientsAsync(string resourceGroup)
         {
             var clients = new List<Client>();
             using (var conn = await ConnectionHelper.GetOpenConnectionAsync(this.connectionString))
@@ -60,7 +60,8 @@ namespace Rebalanser.SqlServer.Clients
       ,[CoordinatorStatus]
       ,GETUTCDATE() AS [TimeNow]
 FROM [RBR].[Clients] 
-WHERE ResourceGroup = @ResourceGroup";
+WHERE ResourceGroup = @ResourceGroup
+AND (ClientStatus = 0 OR ClientStatus = 1)";
                 command.Parameters.Add("@ResourceGroup", SqlDbType.VarChar, 100).Value = resourceGroup;
 
                 using (var reader = await command.ExecuteReaderAsync())
