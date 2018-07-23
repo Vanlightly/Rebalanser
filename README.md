@@ -1,5 +1,7 @@
 # Rebalanser
-Resource distribution amongst collaborating nodes, for example, distributing multiple queues amongst a group of consumers.
+Resource distribution amongst collaborating nodes, for example, distributing multiple queues amongst a group of consumers (like Kafkas partitions and consumer groups).
+
+See my [blog post](https://jack-vanlightly.com/blog/2018/7/22/creating-consumer-groups-in-rabbitmq-with-rebalanser-part-1) that describes using Rebalanser with RabbitMQ to distribute consumpton of a sharded queue among consumers.
 
 ## Concepts
 Rebalanser is a code library. When a RebalanserContext starts, it acts as a node in a resource group. A resource group is a group of nodes that collaborate to consume a group of resources. An example would be like Kafka's consumer groups where a group of consumers consume the partitions of a given topic.
